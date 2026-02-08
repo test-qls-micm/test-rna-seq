@@ -1,4 +1,4 @@
-name: Issue Copilot Routing
+name: Copilot Review
 
 on:
   issue_comment:
