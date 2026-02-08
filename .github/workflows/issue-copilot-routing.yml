@@ -1,8 +1,6 @@
 name: Issue Copilot Routing
 
 on:
-  issues:
-    types: [opened]
   issue_comment:
     types: [created]
 
@@ -36,179 +34,77 @@ jobs:
 
             const issue = context.payload.issue;
             const issueNumber = issue.number;
-            const issueBody = issue.body || '';
+            const comment = context.payload.comment;
 
-            const instructionsPath = path.join(process.cwd(), '.github', 'copilot-instructions.md');
-            const instructions = fs.existsSync(instructionsPath)
-              ? fs.readFileSync(instructionsPath, 'utf8')
-              : '';
+            const triggerAuthor = 'ehuan2';
+            const triggerPrefix = 'Copilot review started. General guidance (from guidelines.md):';
+            const labelName = 'copilot-reviewed';
+
+            if (!comment || comment.user?.login !== triggerAuthor) {
+              core.info('Skipping: comment author does not match trigger author.');
+              return;
+            }
+
+            const firstLine = (comment.body || '').split(/\r?\n/)[0].trim();
+            if (firstLine !== triggerPrefix) {
+              core.info('Skipping: comment does not match trigger prefix.');
+              return;
+            }
+
+            const existing = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber
+            });
+
+            const existingLabels = (existing.data.labels || [])
+              .map((label) => (typeof label === 'string' ? label : label.name))
+              .filter(Boolean);
+
+            if (existingLabels.includes(labelName)) {
+              core.info(`Skipping: ${labelName} label already present.`);
+              return;
+            }
 
             const guidelinesPath = path.join(process.cwd(), '.github', 'guidelines.md');
             const guidelines = fs.existsSync(guidelinesPath)
               ? fs.readFileSync(guidelinesPath, 'utf8').trim()
               : '';
 
-            const getSection = (content, header) => {
-              const pattern = new RegExp(`^##\\s+${header}\\s*$`, 'm');
-              const match = content.match(pattern);
-              if (!match) return '';
-              const startIndex = match.index + match[0].length;
-              const rest = content.slice(startIndex);
-              const nextHeaderMatch = rest.match(/^##\s+.+$/m);
-              const endIndex = nextHeaderMatch ? startIndex + nextHeaderMatch.index : content.length;
-              return content.slice(startIndex, endIndex).trim();
-            };
+            const reviewBody = guidelines
+              ? `Copilot review for ${context.repo.owner}/${context.repo.repo}:\n\n${guidelines}`
+              : 'Copilot review requested, but guidelines.md was not found in this repository.';
 
-            const applyTemplate = (template, link) => {
-              if (!template) return '';
-              return template.replace(/\{\{\s*link\s*\}\}/gi, link || '');
-            };
-
-            const prTemplate = getSection(instructions, 'PR_COMMENT');
-            const nonPrTemplate = getSection(instructions, 'NON_PR_COMMENT');
-            const noLinkTemplate = getSection(instructions, 'NO_LINK_COMMENT');
-
-            const linkRegex = /https?:\/\/github\.com\/[^\s)\]]+/gi;
-
-            const allTexts = [];
-            if (issueBody) {
-              allTexts.push({
-                createdAt: issue.created_at || '1970-01-01T00:00:00Z',
-                body: issueBody
-              });
-            }
-
-            const comments = await github.paginate(github.rest.issues.listComments, {
+            await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: issueNumber,
-              per_page: 100
+              body: reviewBody
             });
 
-            for (const comment of comments) {
-              if (comment.body) {
-                allTexts.push({
-                  createdAt: comment.created_at || '1970-01-01T00:00:00Z',
-                  body: comment.body
-                });
-              }
-            }
-
-            allTexts.sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
-
-            const allLinks = [];
-            for (const entry of allTexts) {
-              const matches = entry.body.match(linkRegex) || [];
-              for (const match of matches) {
-                allLinks.push(match);
-              }
-            }
-
-            const latestLink = allLinks.length > 0 ? allLinks[allLinks.length - 1] : '';
-
-            const prMatch = latestLink.match(/https?:\/\/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/i);
-            const repoMatch = latestLink.match(/https?:\/\/github\.com\/([^/]+)\/([^/]+)\/?$/i);
-
-            if (!latestLink) {
-              const body = applyTemplate(noLinkTemplate, '') || 'Please add a GitHub link to your PR or GitHub page.';
-              await github.rest.issues.createComment({
+            try {
+              await github.rest.issues.addLabels({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issueNumber,
-                body
+                labels: [labelName]
               });
-              return;
-            }
-
-            if (prMatch) {
-              const [, owner, repo, pullNumber] = prMatch;
-              const body = applyTemplate(prTemplate, latestLink) || `Found PR link: ${latestLink}. Starting Copilot review.`;
-              const reviewBody = guidelines
-                ? `Copilot review started. The review will follow these guidelines:\n\n${guidelines}`
-                : 'Copilot review started. No guidelines.md found.';
-
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issueNumber,
-                body
-              });
-
-              const labelName = 'copilot-review';
+            } catch (error) {
               try {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: labelName,
+                  color: '0e8a16',
+                  description: 'Copilot review completed'
+                });
                 await github.rest.issues.addLabels({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: issueNumber,
                   labels: [labelName]
                 });
-              } catch (error) {
-                try {
-                  await github.rest.issues.createLabel({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    name: labelName,
-                    color: '0e8a16',
-                    description: 'Copilot review requested'
-                  });
-                  await github.rest.issues.addLabels({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: issueNumber,
-                    labels: [labelName]
-                  });
-                } catch (innerError) {
-                  core.warning(`Unable to add label ${labelName}: ${innerError.message}`);
-                }
+              } catch (innerError) {
+                core.warning(`Unable to add label ${labelName}: ${innerError.message}`);
               }
-
-              await github.rest.issues.createComment({
-                owner,
-                repo,
-                issue_number: Number(pullNumber),
-                body: reviewBody
-              });
-
-              return;
             }
-
-            if (repoMatch) {
-              const [, targetOwner, targetRepo] = repoMatch;
-              const generalBody = guidelines
-                ? `Copilot review started. General guidance (from guidelines.md):\n\n${guidelines}`
-                : 'Copilot review started. No guidelines.md found.';
-
-              let externalIssueUrl = '';
-              try {
-                const created = await github.rest.issues.create({
-                  owner: targetOwner,
-                  repo: targetRepo,
-                  title: 'Copilot review: general guidance',
-                  body: generalBody
-                });
-                externalIssueUrl = created.data?.html_url || '';
-              } catch (error) {
-                core.warning(`Unable to create issue on ${targetOwner}/${targetRepo}: ${error.message}`);
-              }
-
-              const body = externalIssueUrl
-                ? `Found GitHub repo link: ${latestLink}. Started Copilot review and opened an issue: ${externalIssueUrl}`
-                : `Found GitHub repo link: ${latestLink}. Could not open an issue there (permissions may be missing).`;
-
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: issueNumber,
-                body
-              });
-
-              return;
-            }
-
-            const body = applyTemplate(nonPrTemplate, latestLink) || `Found GitHub link: ${latestLink}. Please provide a PR link.`;
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issueNumber,
-              body
-            });
