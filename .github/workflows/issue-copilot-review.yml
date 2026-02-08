@@ -34,20 +34,20 @@ jobs:
 
             const issue = context.payload.issue;
             const issueNumber = issue.number;
-            const comment = context.payload.comment;
+            const issueBody = issue.body || '';
 
             const triggerAuthor = 'ehuan2';
             const triggerPrefix = 'Copilot review started. General guidance (from guidelines.md):';
             const labelName = 'copilot-reviewed';
 
-            if (!comment || comment.user?.login !== triggerAuthor) {
-              core.info('Skipping: comment author does not match trigger author.');
+            if (issue.user?.login !== triggerAuthor) {
+              core.info('Skipping: issue author does not match trigger author.');
               return;
             }
 
-            const firstLine = (comment.body || '').split(/\r?\n/)[0].trim();
+            const firstLine = issueBody.split(/\r?\n/)[0].trim();
             if (firstLine !== triggerPrefix) {
-              core.info('Skipping: comment does not match trigger prefix.');
+              core.info('Skipping: issue body does not match trigger prefix.');
               return;
             }
 
