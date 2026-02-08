@@ -1,4 +1,4 @@
-name: Copilot Review
+name: Issue Copilot Review
 
 on:
   issue_comment:
